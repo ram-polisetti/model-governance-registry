@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mgreg"
+version = "0.1.0"
+description = "Lightweight model governance registry: model cards, NIST AI RMF risk assessments, approval workflows, tamper-evident audit trail."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Ram Charan Satya Sai Teja Polisetti" }]
+keywords = ["ai-governance", "model-cards", "nist-ai-rmf", "responsible-ai", "mlops", "audit-trail"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.scripts]
+mgreg = "mgreg.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
