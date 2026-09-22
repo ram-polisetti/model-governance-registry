@@ -20,10 +20,16 @@ What this registry is not, and where its guarantees end.
   result is validated for shape at import time, but the registry does
   not re-run the audit or check that the audited artifact is the one
   being approved. Traceability is a discipline, not a proof.
-- **Approvals are single-decider.** There is no multi-approver quorum,
-  no delegation, and no expiry of stale approvals. A new card or risk
-  version after approval does not invalidate the approval — re-approval
-  is a process decision left to the operator.
+- **Approvals are single-decider.** There is no multi-approver quorum and
+  no delegation. Approval staleness *is* enforced by the sweeper
+  (`docs/SWEEPER.md`): a new card or risk version, stale evidence, a
+  reclassified risk tier, or a monitor drift flag demotes the model to
+  `under_review` until a human re-approves, retires, or waives with a
+  rationale.
+- **The sweeper checks the cited evidence, not the model's merit.** It
+  cannot tell whether a new card version is an improvement or whether a
+  monitor RED is a false alarm — that judgment is the re-reviewer's job.
+  Waivers exist for exactly this reason, and every waiver is audited.
 - **Seed data is fictional.** The three example models, their cards,
   risks, audit numbers, and incidents are synthetic illustrations, all
   labeled as such. Real deployments start from an empty registry

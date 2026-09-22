@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0 — 2026-09-22
+
+Stale-approval sweeper: approvals are a living state, not a checkbox.
+
+- Every approval now snapshots what the approver saw (`card_version`,
+  `risk_version`, `risk_level`); older databases are migrated
+  idempotently.
+- Four config-driven sweep rules: `model_version_changed`,
+  `evidence_stale` (missing / past `expires_at` / older than the per-kind
+  max age), `risk_reclassified`, `monitor_drift` (read from the disparity
+  monitor's state DB, read-only).
+- Re-review queue: flags open items with rule + reason + detail, demote
+  the model `approved → under_review`; repeats deduplicated.
+- Resolutions: `reapprove` (fresh approval with chosen evidence, siblings
+  superseded), `retire`, `waive` (risk acceptance with a stored baseline —
+  a waived rule only re-fires on further change).
+- New lifecycle edges: `approved → under_review` (sweeper demotion),
+  `under_review → approved` (waiver), `under_review → retired`.
+- CLI: `mgreg sweep`, `mgreg queue`, `mgreg resolve`; dashboard gains a
+  `/re-review` page; `examples/sweeper-demo.py` walks one approval going
+  stale four ways. 54/54 tests pass (33 existing + 21 new).
+
 ## 0.1.0 — 2026-09-22
 
 Initial release.

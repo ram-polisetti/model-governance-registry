@@ -29,6 +29,7 @@ mgreg approve --model "My Model" --approver "risk-lead" \
     --decision approved --rationale "Evidence reviewed; human-in-the-loop enforced."
 mgreg show --model "My Model"
 mgreg verify                     # verify the audit chain
+mgreg sweep --config examples/sweeper-config.json   # stale-approval sweep
 mgreg serve --port 8080          # read-mostly web dashboard
 ```
 
@@ -38,6 +39,10 @@ mgreg serve --port 8080          # read-mostly web dashboard
 draft -> under_review -> approved -> retired
                      -> rejected -> draft -> under_review ...
 ```
+
+The sweeper can demote `approved -> under_review` when an approval goes
+stale, and a waiver can return `under_review -> approved` — every
+transition is hash-chained. See [docs/SWEEPER.md](docs/SWEEPER.md).
 
 - Approving requires a model card **and** a risk assessment — a model cannot
   be approved on an empty file, and approvals without a written rationale are
@@ -74,6 +79,7 @@ HTML-escaped.
 ## Documentation
 
 - [docs/METHODOLOGY.md](docs/METHODOLOGY.md) — governance model and design decisions
+- [docs/SWEEPER.md](docs/SWEEPER.md) — the stale-approval sweeper: rules, queue, resolutions
 - [docs/SCHEMA.md](docs/SCHEMA.md) — database schema
 - [LIMITATIONS.md](LIMITATIONS.md) — what this is not
 - [CHANGELOG.md](CHANGELOG.md) — version history

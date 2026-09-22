@@ -40,7 +40,34 @@ updated in place.
 | decision     | TEXT | approved \| rejected                         |
 | rationale    | TEXT | mandatory written reason                     |
 | evidence_ids | TEXT | JSON list of evidence ids cited              |
+| card_version | INTEGER | model-card version at approval (nullable on pre-sweeper rows) |
+| risk_version | INTEGER | risk-assessment version at approval (nullable on pre-sweeper rows) |
+| risk_level   | TEXT | risk tier at approval (nullable on pre-sweeper rows) |
 | created_at   | TEXT |                                              |
+
+The sweeper compares current card/risk versions and tier against these
+snapshots. Pre-sweeper approvals have NULL snapshots and are flagged for
+manual review rather than compared.
+
+## re_review_queue
+
+| column      | type | notes                                                    |
+|-------------|------|----------------------------------------------------------|
+| id          | TEXT | primary key                                              |
+| model_id    | TEXT | FK → models.id                                           |
+| rule        | TEXT | model_version_changed \| evidence_stale \| risk_reclassified \| monitor_drift |
+| reason      | TEXT | human-readable one-liner                                 |
+| detail      | TEXT | JSON detail payload (versions, evidence ids, monitor run) |
+| status      | TEXT | open \| resolved                                         |
+| created_at  | TEXT |                                                          |
+| resolved_at | TEXT |                                                          |
+| resolved_by | TEXT | actor                                                    |
+| resolution  | TEXT | JSON: decision (reapprove \| retire \| waive \| superseded), rationale, waiver baseline |
+
+One open item per (model_id, rule) — the sweeper deduplicates before
+inserting. `reapprove`/`retire` supersede sibling open items for the
+model; `waive` stores a baseline of the accepted state so the rule only
+re-fires on further change.
 
 ## evidence
 

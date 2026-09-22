@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mgreg"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lightweight model governance registry: model cards, NIST AI RMF risk assessments, approval workflows, tamper-evident audit trail."
 readme = "README.md"
 requires-python = ">=3.10"
