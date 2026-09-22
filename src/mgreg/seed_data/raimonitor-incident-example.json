@@ -1,0 +1,12 @@
+{
+  "detail": "Refusal rate fell from 4.1% to 1.2% over 7 days after a corpus update. Under investigation.",
+  "id": "INC-EXAMPLE-001",
+  "model": "Hiring Screen RAG Assistant",
+  "note": "SYNTHETIC EXAMPLE DATA \u2014 not a real incident",
+  "prev_hash": "GENESIS",
+  "raised_at": "2026-09-20T12:00:00Z",
+  "record_hash": "example-not-signed",
+  "severity": "medium",
+  "status": "open",
+  "title": "SYNTHETIC EXAMPLE \u2014 refusal-rate dip on hiring assistant"
+}

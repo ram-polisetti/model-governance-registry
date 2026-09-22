@@ -1,0 +1,69 @@
+{
+  "bootstrap_samples": 0,
+  "confidence_intervals": {},
+  "context": {
+    "note": "SYNTHETIC EXAMPLE DATA \u2014 not a real audit"
+  },
+  "demographic_parity_diff": 0.050000000000000044,
+  "disparate_impact_ratio": 0.9375,
+  "flags": [
+    {
+      "check": "disparate_impact_ratio",
+      "passed": true,
+      "threshold": {
+        "min": 0.8
+      },
+      "value": 0.9375
+    },
+    {
+      "check": "demographic_parity_diff",
+      "passed": true,
+      "threshold": {
+        "max": 0.2
+      },
+      "value": 0.050000000000000044
+    },
+    {
+      "check": "tpr_gap",
+      "passed": true,
+      "threshold": {
+        "max": 0.15
+      },
+      "value": 0.0
+    },
+    {
+      "check": "fpr_gap",
+      "passed": true,
+      "threshold": {
+        "max": 0.15
+      },
+      "value": 0.0
+    }
+  ],
+  "fpr_gap": 0.0,
+  "groups": [
+    {
+      "accuracy": 1.0,
+      "fpr": 0.0,
+      "group": "A",
+      "n": 20,
+      "precision": 1.0,
+      "selection_rate": 0.8,
+      "tpr": 1.0
+    },
+    {
+      "accuracy": 1.0,
+      "fpr": 0.0,
+      "group": "B",
+      "n": 20,
+      "precision": 1.0,
+      "selection_rate": 0.75,
+      "tpr": 1.0
+    }
+  ],
+  "min_group_n": null,
+  "n_total": 40,
+  "review_reasons": [],
+  "tpr_gap": 0.0,
+  "warnings": []
+}
