@@ -13,6 +13,7 @@ from .store import Registry, RegistryError
 from . import evidence as evidence_mod
 from . import seed as seed_mod
 from . import server as server_mod
+from . import sweeper as sweeper_mod
 
 
 def default_db() -> str:
@@ -194,6 +195,65 @@ def cmd_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sweep(args: argparse.Namespace) -> int:
+    reg = _registry(args)
+    cfg = (sweeper_mod.load_config(args.config) if args.config
+           else sweeper_mod.default_config())
+    report = sweeper_mod.sweep(reg, cfg)
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True, default=str))
+    else:
+        print(f"swept {report['models_checked']} approved model(s): "
+              f"{report['flags']} flag(s), "
+              f"{report['queue_items_created']} new re-review item(s), "
+              f"{report['models_demoted']} demoted")
+        for m in report["models"]:
+            for flag in m["flags"]:
+                print(f"  ! {m['model']}: [{flag['rule']}] {flag['reason']}")
+            for note in m["notes"]:
+                print(f"  - {m['model']}: {note}")
+    return 0
+
+
+def cmd_queue(args: argparse.Namespace) -> int:
+    reg = _registry(args)
+    items = reg.list_re_review(args.status or "open")
+    if args.json:
+        print(json.dumps(items, indent=2, sort_keys=True, default=str))
+    else:
+        if not items:
+            print("re-review queue is empty")
+            return 0
+        for it in items:
+            model = reg.get_model(it["model_id"])
+            print(f"{it['id']}  [{it['status']}] {model['name']}  "
+                  f"rule={it['rule']}")
+            print(f"    reason: {it['reason']}")
+            print(f"    detected: {it['detected_at']}")
+            if it["status"] == "resolved":
+                res = it.get("resolution") or {}
+                print(f"    resolved: {it['resolved_at']} by "
+                      f"{it['resolved_by']} ({res.get('decision')})")
+    return 0
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    reg = _registry(args)
+    baseline = None
+    if args.decision == "waive":
+        cfg = (sweeper_mod.load_config(args.config) if args.config
+               else sweeper_mod.default_config())
+        item = reg.get_queue_item(args.id)
+        baseline = sweeper_mod.build_waiver_baseline(
+            reg, cfg, item["model_id"])
+    item = reg.resolve_re_review(
+        args.id, args.decision, args.rationale, args.actor,
+        approver=args.approver, waiver_baseline=baseline,
+        evidence_ids=args.evidence)
+    print(f"re-review {item['id']} resolved: {args.decision}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="mgreg",
@@ -302,6 +362,34 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("seed", help="seed the demo registry (3 example models)")
     add_actor(s)
     s.set_defaults(func=cmd_seed)
+
+    s = sub.add_parser("sweep",
+                       help="run the stale-approval sweeper over approved models")
+    s.add_argument("--config", default=None,
+                   help="sweeper config file (JSON; built-in defaults used if omitted)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_sweep)
+
+    s = sub.add_parser("queue", help="list the re-review queue")
+    s.add_argument("--status", default="open",
+                   choices=("open", "resolved", "all"))
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_queue)
+
+    s = sub.add_parser("resolve", help="resolve a re-review queue item")
+    s.add_argument("--id", required=True, help="queue item id")
+    s.add_argument("--decision", required=True,
+                   choices=("reapprove", "retire", "waive"))
+    s.add_argument("--rationale", required=True)
+    s.add_argument("--approver", default=None,
+                   help="required for reapprove")
+    s.add_argument("--evidence", nargs="*", default=None,
+                   help="evidence ids the fresh approval cites "
+                        "(reapprove only; default: all current evidence)")
+    s.add_argument("--config", default=None,
+                   help="sweeper config (used to baseline a waiver)")
+    add_actor(s)
+    s.set_defaults(func=cmd_resolve)
 
     return p
 

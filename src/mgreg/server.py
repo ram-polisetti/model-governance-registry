@@ -96,6 +96,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/":
                 self._send(_page("Models", self._index()))
+            elif path == "/re-review":
+                self._send(_page("Re-review queue", self._re_review()))
             elif path.startswith("/model/"):
                 ident = path[len("/model/"):]
                 self._send(_page("Model", self._detail(ident)))
@@ -120,7 +122,33 @@ class Handler(BaseHTTPRequestHandler):
                  if rows else "<p>No models registered yet.</p>")
         return (f"<h1>Model governance registry</h1>"
                 f"<p class='meta'>Model cards, NIST AI RMF risk assessments, "
-                f"approvals, and a tamper-evident audit trail.</p>{table}")
+                f"approvals, and a tamper-evident audit trail. "
+                f"<a href='/re-review'>Re-review queue</a>.</p>{table}")
+
+    def _re_review(self) -> str:
+        reg = self.registry
+        items = reg.list_re_review("open")
+        rows = []
+        for it in items:
+            try:
+                model = reg.get_model(it["model_id"])
+                name = (f'<a href="/model/{esc(model["id"])}">'
+                        f'{esc(model["name"])}</a>')
+            except ValueError:
+                name = '<span class="meta">unknown model</span>'
+            rows.append(
+                f"<tr><td>{name}</td>"
+                f"<td><code>{esc(it['rule'])}</code></td>"
+                f"<td>{esc(it['reason'])}</td>"
+                f"<td class='meta'>{esc(it['detected_at'])}</td></tr>")
+        table = ("<table><tr><th>Model</th><th>Rule</th><th>Reason</th>"
+                 "<th>Detected</th></tr>" + "".join(rows) + "</table>"
+                 if rows else "<p>No open re-review items. "
+                 "Every approval currently holds.</p>")
+        return (f"<p><a href='/'>&larr; all models</a></p>"
+                f"<h1>Re-review queue</h1>"
+                f"<p class='meta'>Approvals the sweeper found no longer hold. "
+                f"Resolve with <code>mgreg resolve</code>.</p>{table}")
 
     def _detail(self, ident: str) -> str:
         reg = self.registry
