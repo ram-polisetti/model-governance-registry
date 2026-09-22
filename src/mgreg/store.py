@@ -32,8 +32,16 @@ STATUSES = ("draft", "under_review", "approved", "rejected", "retired")
 
 TRANSITIONS = {
     "draft": ("under_review", "retired"),
-    "under_review": ("approved", "rejected", "draft"),
-    "approved": ("retired",),
+    # approved -> under_review is the sweeper's demotion path: a stale
+    # approval no longer holds, so the model goes back under review.
+    # under_review -> approved is the waiver path (resolve --decision waive):
+    # a human accepts the flagged state as-is, with rationale, and the
+    # waiver is recorded in the audit trail. There is no CLI shortcut that
+    # approves without an approval record — waivers go through the sweeper.
+    # under_review -> retired lets a re-review end in retirement
+    # (e.g. the model is superseded while its approval is stale).
+    "under_review": ("approved", "rejected", "draft", "retired"),
+    "approved": ("under_review", "retired"),
     "rejected": ("draft",),
     "retired": (),
 }
@@ -62,6 +70,41 @@ class Registry:
     def __init__(self, path: str, now: db.NowFn | None = None):
         self.conn = db.connect(path)
         self.now = now or db.utcnow
+        self._migrate()
+
+    # -- migrations ----------------------------------------------------
+    def _migrate(self) -> None:
+        """Bring older databases up to the current schema.
+
+        New columns on ``approvals`` (approval-time snapshots used by the
+        stale-approval sweeper) and the ``re_review_queue`` table are added
+        idempotently, so registries created before the sweeper keep working.
+        """
+        cols = {r["name"] for r in
+                self.conn.execute("PRAGMA table_info(approvals)")}
+        for col, ddl in (("card_version", "INTEGER"),
+                         ("risk_version", "INTEGER"),
+                         ("risk_level", "TEXT")):
+            if col not in cols:
+                self.conn.execute(
+                    f"ALTER TABLE approvals ADD COLUMN {col} {ddl}")
+        self.conn.executescript("""
+        CREATE TABLE IF NOT EXISTS re_review_queue (
+            id          TEXT PRIMARY KEY,
+            model_id    TEXT NOT NULL REFERENCES models(id),
+            rule        TEXT NOT NULL,
+            reason      TEXT NOT NULL,
+            detail      TEXT NOT NULL DEFAULT '{}',
+            detected_at TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'open',
+            resolved_at TEXT,
+            resolved_by TEXT,
+            resolution  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_rereview_model
+            ON re_review_queue(model_id, status);
+        """)
+        self.conn.commit()
 
     # -- low-level -----------------------------------------------------
     def _new_id(self) -> str:
@@ -251,6 +294,8 @@ class Registry:
         if self.latest_risk(row["id"]) is None:
             raise RegistryError(
                 "cannot approve a model with no risk assessment")
+        card = self.latest_card(row["id"])
+        risk = self.latest_risk(row["id"])
         evidence_ids = list(evidence_ids or [])
         for eid in evidence_ids:
             if self.conn.execute(
@@ -264,10 +309,15 @@ class Registry:
         self.conn.execute(
             """INSERT INTO approvals
                (id, model_id, version, approver, decision, rationale,
-                evidence_ids, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                evidence_ids, created_at,
+                card_version, risk_version, risk_level)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (approval_id, row["id"], version, approver, decision,
-             rationale, json.dumps(evidence_ids), self.now()))
+             rationale, json.dumps(evidence_ids), self.now(),
+             # Snapshots the sweeper compares against: what the approver
+             # actually saw. Never updated afterwards — new approvals
+             # snapshot anew.
+             card["version"], risk["version"], risk["overall_risk"]))
         self.conn.commit()
         self._event("approval_recorded", row["id"],
                     {"approval_id": approval_id, "version": version,
@@ -284,6 +334,192 @@ class Registry:
             "SELECT * FROM approvals WHERE model_id = ? "
             "ORDER BY version DESC LIMIT 1", (row["id"],)).fetchone()
         return self._json_row(rec) if rec else None
+
+    # -- re-review queue (stale-approval sweeper) -------------------------
+    def approved_models(self) -> list[dict[str, Any]]:
+        """Models whose approval currently holds, with their snapshots."""
+        rows = self.conn.execute(
+            "SELECT * FROM models WHERE status = 'approved' "
+            "ORDER BY created_at")
+        out = []
+        for r in rows:
+            m = dict(r)
+            m["approval"] = self.latest_approval(m["id"])
+            out.append(m)
+        return out
+
+    def flag_for_re_review(self, model_id: str, rule: str, reason: str,
+                           detail: dict[str, Any], actor: str
+                           ) -> tuple[dict[str, Any], bool]:
+        """Open a re-review item and demote the model to under_review.
+
+        Idempotent per (model, rule): if an open item for the same rule
+        already exists, nothing happens. Returns ``(item, created)``.
+        Every flag and the demotion are hash-chained audit events.
+        """
+        row = self._model_row(model_id)
+        existing = self.conn.execute(
+            "SELECT * FROM re_review_queue WHERE model_id = ? AND rule = ?"
+            " AND status = 'open'", (row["id"], rule)).fetchone()
+        if existing is not None:
+            return dict(existing), False
+        queue_id = self._new_id()
+        self.conn.execute(
+            """INSERT INTO re_review_queue
+               (id, model_id, rule, reason, detail, detected_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'open')""",
+            (queue_id, row["id"], rule, reason,
+             json.dumps(detail, sort_keys=True), self.now()))
+        self.conn.commit()
+        self._event("re_review_flagged", row["id"],
+                    {"queue_id": queue_id, "rule": rule,
+                     "reason": reason, "detail": detail}, actor)
+        # The stale approval no longer holds: back under review — but only
+        # when this is a *new* finding. A repeat sweep must not demote a
+        # model that a waiver already returned to approved.
+        if row["status"] == "approved":
+            self.set_status(row["id"], "under_review", actor)
+        rec = self.conn.execute(
+            "SELECT * FROM re_review_queue WHERE id = ?",
+            (queue_id,)).fetchone()
+        return dict(rec), True
+
+    def list_re_review(self, status: str | None = None
+                       ) -> list[dict[str, Any]]:
+        if status not in (None, "open", "resolved", "all"):
+            raise RegistryError(f"unknown queue status: {status!r}")
+        if status in (None, "open"):
+            recs = self.conn.execute(
+                "SELECT * FROM re_review_queue WHERE status = 'open'"
+                " ORDER BY detected_at")
+        elif status == "resolved":
+            recs = self.conn.execute(
+                "SELECT * FROM re_review_queue WHERE status = 'resolved'"
+                " ORDER BY detected_at")
+        else:
+            recs = self.conn.execute(
+                "SELECT * FROM re_review_queue ORDER BY detected_at")
+        return [self._queue_row(r) for r in recs]
+
+    def get_queue_item(self, queue_id: str) -> dict[str, Any]:
+        rec = self.conn.execute(
+            "SELECT * FROM re_review_queue WHERE id = ?", (queue_id,)).fetchone()
+        if rec is None:
+            raise RegistryError(f"no such re-review item: {queue_id!r}")
+        return self._queue_row(rec)
+
+    def latest_waiver(self, model_id: str) -> dict[str, Any] | None:
+        """The most recent waive resolution for a model, if any.
+
+        Returns the stored baseline the waiver accepted, so the sweeper
+        only re-fires a waived rule when the state changes *again*.
+        """
+        row = self._model_row(model_id)
+        recs = self.conn.execute(
+            "SELECT resolution FROM re_review_queue WHERE model_id = ?"
+            " AND status = 'resolved' ORDER BY resolved_at DESC",
+            (row["id"],))
+        for rec in recs:
+            try:
+                resolution = json.loads(rec["resolution"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if resolution.get("decision") == "waive":
+                return resolution.get("baseline") or {}
+        return None
+
+    def resolve_re_review(self, queue_id: str, decision: str,
+                          rationale: str, actor: str,
+                          approver: str | None = None,
+                          waiver_baseline: dict[str, Any] | None = None,
+                          evidence_ids: list[str] | None = None
+                          ) -> dict[str, Any]:
+        """Resolve an open re-review item.
+
+        - ``reapprove``: record a fresh approval (needs ``approver``);
+          the model returns to ``approved`` with new snapshots. The fresh
+          approval covers the whole model, so any *sibling* open items for
+          the model are resolved as superseded. ``evidence_ids`` selects
+          what the new approval cites (default: all current evidence) —
+          cite fresh evidence, not the stale findings, when re-approving.
+        - ``retire``: retire the model; sibling open items are superseded.
+        - ``waive``: a human accepts the flagged state as-is; only this
+          item is resolved and the model returns to ``approved``. The
+          waiver baseline is stored so the sweeper only re-fires that rule
+          on *further* change.
+        """
+        if decision not in ("reapprove", "retire", "waive"):
+            raise RegistryError(
+                "decision must be one of reapprove, retire, waive")
+        rationale = rationale.strip()
+        if not rationale:
+            raise RegistryError("a rationale is required — resolutions "
+                                "without reasons are not governance")
+        item = self.get_queue_item(queue_id)
+        if item["status"] != "open":
+            raise RegistryError(f"re-review item {queue_id!r} is already "
+                                f"{item['status']}")
+        row = self._model_row(item["model_id"])
+        if decision == "reapprove":
+            if not (approver or "").strip():
+                raise RegistryError("reapprove requires an approver")
+            if evidence_ids is None:
+                evidence_ids = [e["id"] for e in self.list_evidence(row["id"])]
+            self.record_approval(row["id"], approver.strip(), "approved",
+                                 rationale, list(evidence_ids), actor)
+        elif decision == "retire":
+            self.set_status(row["id"], "retired", actor)
+        else:  # waive
+            self._event("approval_waived", row["id"],
+                        {"queue_id": queue_id, "rule": item["rule"],
+                         "rationale": rationale,
+                         "baseline": waiver_baseline or {}}, actor)
+            self.set_status(row["id"], "approved", actor)
+        resolution = {"decision": decision, "rationale": rationale,
+                      "baseline": waiver_baseline or {}}
+        self.conn.execute(
+            """UPDATE re_review_queue SET status = 'resolved',
+               resolved_at = ?, resolved_by = ?, resolution = ?
+               WHERE id = ?""",
+            (self.now(), actor, json.dumps(resolution, sort_keys=True),
+             queue_id))
+        self.conn.commit()
+        self._event("re_review_resolved", row["id"],
+                    {"queue_id": queue_id, "decision": decision,
+                     "rationale": rationale}, actor)
+        if decision in ("reapprove", "retire"):
+            # The fresh decision covers the whole model: sibling open
+            # items are superseded, not left dangling.
+            for sib in self.list_re_review("open"):
+                if sib["model_id"] == row["id"] and sib["id"] != queue_id:
+                    self.conn.execute(
+                        """UPDATE re_review_queue SET status = 'resolved',
+                           resolved_at = ?, resolved_by = ?, resolution = ?
+                           WHERE id = ?""",
+                        (self.now(), actor,
+                         json.dumps({"decision": "superseded",
+                                     "rationale": f"superseded by {decision} "
+                                                  f"of {queue_id}",
+                                     "baseline": {}}, sort_keys=True),
+                         sib["id"]))
+                    self.conn.commit()
+                    self._event("re_review_resolved", row["id"],
+                                {"queue_id": sib["id"],
+                                 "decision": "superseded",
+                                 "rationale": f"superseded by {decision} of "
+                                              f"{queue_id}"}, actor)
+        return self.get_queue_item(queue_id)
+
+    @staticmethod
+    def _queue_row(rec: sqlite3.Row) -> dict[str, Any]:
+        out = dict(rec)
+        for key in ("detail", "resolution"):
+            if isinstance(out.get(key), str):
+                try:
+                    out[key] = json.loads(out[key])
+                except json.JSONDecodeError:
+                    pass
+        return out
 
     # -- evidence -------------------------------------------------------
     def attach_evidence(self, name_or_id: str, kind: str,

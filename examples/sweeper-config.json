@@ -1,0 +1,1 @@
+{"actor":"sweeper","evidence_max_age_days":{"default":180,"document":180,"note":365,"opsaudit_audit":90,"raimonitor_incident":30},"monitors":[{"model":"Churn Classifier","monitor_model":"churn-classifier","state_db":"/var/lib/disparity-monitor/state.db"}],"rules":{"evidence_stale":true,"model_version_changed":true,"monitor_drift":true,"risk_reclassified":true}}
